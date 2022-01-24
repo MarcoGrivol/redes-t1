@@ -1,5 +1,6 @@
 # Camada de aplicação – servidor IRC
 
+
 ## Introdução
 
 O IRC (*Internet Relay Chat*) foi um dos primeiros protocolos para troca de mensagens instantâneas pela internet. Lançado em 1988, ele ainda hoje é amplamente usado para reunir a comunidade de diversos projetos de software livre. Nesta prática, vamos implementar um servidor compatível com um subconjunto do protocolo IRC.
