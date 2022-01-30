@@ -26,7 +26,6 @@ def sair(conexao):
             del servidor.channels[ch][idx]
             for client in servidor.channels[ch]:
                 receiver_id = servidor.nicks[client.lower()]
-                print(b'Enviando para ->' + client)
                 receiver_id.enviar(b':%s QUIT\r\n' % conexao.nick)
         del servidor.nicks[conexao.nick.lower()]
     print(conexao, 'conexão fechada')
@@ -91,7 +90,6 @@ def joinResponse(conexao, channel):
         servidor.channels[channel.lower()] = []
     
     servidor.channels[channel.lower()].append(conexao.nick)
-    print(servidor.channels[channel.lower()])
 
     buffer = b':server 353 %s = %s :' % (conexao.nick, channel)
     for client in sorted(servidor.channels[channel.lower()]):
@@ -124,7 +122,6 @@ def partResponse(conexao, channel):
 def verifyData(data):
     data_stream = splitstr(data, b'\n')
     if b'\n' in data_stream[0]:
-        # print(data_stream)
         clean_data = data_stream[0]
         if len(data_stream) > 1:
             residual = b''.join(data_stream[1:])
@@ -137,10 +134,8 @@ def verifyData(data):
         
 def parseInput(conexao, data):
     if conexao.buffer != b'':
-        # print(b'New buffer ->' + conexao.buffer + b' + ' + data)
         data = conexao.buffer + data
     clean_data, residual = verifyData(data)
-    # print(b'Clean + residual ->' + clean_data + b'<->' + residual)
     conexao.buffer = residual
     if isComplete(clean_data):
         return clean_data
@@ -169,13 +164,11 @@ def executeCmd(conexao, command):
         channel = command[1].strip(b'\r\n')
         partResponse(conexao, channel)
 
-    # print(b'buffer ->' + conexao.buffer)
     if isComplete(conexao.buffer):
         buffer = conexao.buffer
         conexao.buffer = b''
         command = parseInput(conexao, buffer)
         executeCmd(conexao, command)
-    # print(servidor.nicks)
 
 def dados_recebidos(conexao, data):
     print(conexao, data)
