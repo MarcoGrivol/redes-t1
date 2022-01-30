@@ -1,29 +1,197 @@
 #!/usr/bin/env python3
+from ast import parse
 import asyncio
 from tcp import Servidor
 import re
 
 
+def splitstr(s, delim):
+    result = [x + delim for x in s.split(delim)]
+    result[-1] = result[-1].strip(delim)
+    if result[-1] == b'':
+        del result[-1]
+    return result
+
 def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
-
 def sair(conexao):
+    channels = []
+    for key in servidor.channels.keys():
+        if conexao.nick in servidor.channels[key]:
+            channels.append(key)
+    for ch in channels:
+        idx = servidor.channels[ch].index(conexao.nick.lower())
+        del servidor.channels[ch][idx]
+        for client in servidor.channels[ch]:
+            receiver_id = servidor.nicks[client.lower()]
+            print(b'Enviando para ->' + client)
+            receiver_id.enviar(b':%s QUIT\r\n' % conexao.nick)
+    del servidor.nicks[conexao.nick.lower()]
     print(conexao, 'conexão fechada')
     conexao.fechar()
 
+def isComplete(data):
+    if data.count(b'\n') == 1:
+        return True
+    return False
 
-def dados_recebidos(conexao, dados):
-    if dados == b'':
+def isNickUnique(nick):
+    if servidor.nicks.get(nick.lower()):
+        return False
+    return True
+
+def isChannelUnique(channel):
+    if servidor.channels.get(channel.lower()):
+        return False
+    return True
+
+def nickResponse(conexao, nick):
+    if hasattr(conexao, 'nick'):
+        # usuário está registrado
+        if isNickUnique(nick):
+            old_nick = conexao.nick
+            del servidor.nicks[old_nick.lower()]
+            conexao.nick = nick
+            servidor.nicks[nick.lower()] = conexao
+            conexao.enviar(b':%s NICK %s\r\n' % (old_nick, nick))
+        else:
+            conexao.enviar(b':server 433 %s %s :Nickname is already in use\r\n' 
+                % (conexao.nick, nick))
+    else:
+        if isNickUnique(nick):
+            conexao.nick = nick
+            servidor.nicks[nick.lower()] = conexao
+            conexao.enviar(b':server 001 %s :Welcome\r\n' % nick)
+            conexao.enviar(b':server 422 %s :MOTD File is missing\r\n' % nick)
+        else:
+            conexao.enviar(b':server 433 * %s :Nickname is already in use\r\n' % nick)
+
+def privmsgResponse(conexao, receiver, msg):
+    if isNickUnique(receiver) and isChannelUnique(receiver):
+        # no channel or nick found
+        return
+    if chr(receiver[0]) == '#':
+        for client in servidor.channels[receiver.lower()]:
+            receiver_id = servidor.nicks[client.lower()]
+            if receiver_id == conexao:
+                continue
+            receiver_id.enviar(b':%s PRIVMSG %s %s' % (conexao.nick, receiver, msg))
+    else:
+        receiver_id = servidor.nicks[receiver.lower()]
+        receiver_id.enviar(b':%s PRIVMSG %s %s' % (conexao.nick, receiver, msg))
+
+def joinResponse(conexao, channel):
+    if chr(channel[0]) != '#' or not validar_nome(channel.strip(b'#')):
+        conexao.enviar(b':server 403 %s :No such channel\r\n' % channel)
+        return
+    if isChannelUnique(channel):
+        # cria servidor se não existir
+        servidor.channels[channel.lower()] = []
+    
+    servidor.channels[channel.lower()].append(conexao.nick)
+    print(servidor.channels[channel.lower()])
+
+    buffer = b':server 353 %s = %s :' % (conexao.nick, channel)
+    for client in sorted(servidor.channels[channel.lower()]):
+        client_id = servidor.nicks[client.lower()]
+        client_id.enviar(b':%s JOIN :%s\r\n' % (conexao.nick, channel))
+        if len(buffer) + len(client) + len(b'\r\n') > 512:
+            conexao.enviar(buffer + b'\r\n')
+            buffer = buffer = b':server 353 %s = %s :' % (conexao.nick, channel)
+        buffer += client + b' '
+    conexao.enviar(buffer + b'\r\n')
+    
+    conexao.enviar(b':server 366 %s %s :End of /NAMES list.\r\n' % (conexao.nick, channel))
+
+
+def partResponse(conexao, channel):
+    channel = channel.split(b' ', 1)[0]
+    if isChannelUnique(channel):
+        # channel does not exist
+        return
+    if conexao.nick not in servidor.channels[channel.lower()]:
+        # clint not in server
+        return
+    for client in servidor.channels[channel.lower()]:
+        receiver_id = servidor.nicks[client.lower()]
+        receiver_id.enviar(b':%s PART %s\r\n' % (conexao.nick, channel))
+    idx = servidor.channels[channel.lower()].index(conexao.nick.lower())
+    del servidor.channels[channel.lower()][idx]
+    
+
+def verifyData(data):
+    data_stream = splitstr(data, b'\n')
+    if b'\n' in data_stream[0]:
+        # print(data_stream)
+        clean_data = data_stream[0]
+        if len(data_stream) > 1:
+            residual = b''.join(data_stream[1:])
+        else:
+            residual = b''
+    else:
+        clean_data = b''
+        residual = data
+    return clean_data, residual
+        
+def parseInput(conexao, data):
+    if conexao.buffer != b'':
+        # print(b'New buffer ->' + conexao.buffer + b' + ' + data)
+        data = conexao.buffer + data
+    clean_data, residual = verifyData(data)
+    # print(b'Clean + residual ->' + clean_data + b'<->' + residual)
+    conexao.buffer = residual
+    if isComplete(clean_data):
+        return clean_data
+    
+def executeCmd(conexao, command):
+    if command is None:
+        return
+    command = command.split(b' ', 1)
+    if command[0] == b'PING':
+        conexao.enviar(b':server PONG server :' + command[1])
+    elif command[0] == b'NICK':
+        nick = command[1].strip(b'\r\n')
+        if not validar_nome(nick):
+            conexao.enviar(b':server 432 * %s :Erroneous nickname\r\n' % nick)
+        else:
+            nickResponse(conexao, nick)
+    elif command[0] == b'PRIVMSG':
+        stream = command[1].split(b' ', 1)
+        receiver = stream[0]
+        msg = stream[1]
+        privmsgResponse(conexao, receiver, msg)
+    elif command[0] == b'JOIN':
+        channel = command[1].strip(b'\r\n')
+        joinResponse(conexao, channel)
+    elif command[0] == b'PART':
+        channel = command[1].strip(b'\r\n')
+        partResponse(conexao, channel)
+
+    # print(b'buffer ->' + conexao.buffer)
+    if isComplete(conexao.buffer):
+        buffer = conexao.buffer
+        conexao.buffer = b''
+        command = parseInput(conexao, buffer)
+        executeCmd(conexao, command)
+    # print(servidor.nicks)
+
+def dados_recebidos(conexao, data):
+    print(conexao, data)
+    if data == b'':
         return sair(conexao)
-    print(conexao, dados)
+    command = parseInput(conexao, data)
+    executeCmd(conexao, command)
 
 
 def conexao_aceita(conexao):
     print(conexao, 'nova conexão')
+    conexao.buffer = b''
     conexao.registrar_recebedor(dados_recebidos)
 
 
 servidor = Servidor(6667)
 servidor.registrar_monitor_de_conexoes_aceitas(conexao_aceita)
+servidor.nicks = {}
+servidor.channels = {}
 asyncio.get_event_loop().run_forever()
