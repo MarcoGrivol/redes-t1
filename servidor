@@ -16,18 +16,19 @@ def validar_nome(nome):
     return re.match(br'^[a-zA-Z][a-zA-Z0-9_-]*$', nome) is not None
 
 def sair(conexao):
-    channels = []
-    for key in servidor.channels.keys():
-        if conexao.nick in servidor.channels[key]:
-            channels.append(key)
-    for ch in channels:
-        idx = servidor.channels[ch].index(conexao.nick.lower())
-        del servidor.channels[ch][idx]
-        for client in servidor.channels[ch]:
-            receiver_id = servidor.nicks[client.lower()]
-            print(b'Enviando para ->' + client)
-            receiver_id.enviar(b':%s QUIT\r\n' % conexao.nick)
-    del servidor.nicks[conexao.nick.lower()]
+    if hasattr(conexao, 'nick'):
+        channels = []
+        for key in servidor.channels.keys():
+            if conexao.nick in servidor.channels[key]:
+                channels.append(key)
+        for ch in channels:
+            idx = servidor.channels[ch].index(conexao.nick.lower())
+            del servidor.channels[ch][idx]
+            for client in servidor.channels[ch]:
+                receiver_id = servidor.nicks[client.lower()]
+                print(b'Enviando para ->' + client)
+                receiver_id.enviar(b':%s QUIT\r\n' % conexao.nick)
+        del servidor.nicks[conexao.nick.lower()]
     print(conexao, 'conexão fechada')
     conexao.fechar()
 
